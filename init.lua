@@ -871,8 +871,32 @@ function mobkit.statfunc(self)
 	return minetest.serialize(tmptab)
 end
 
-function mobkit.actfunc(self, staticdata, dtime_s)
+function mobkit.before_shutdown()
+    local objects = minetest.get_objects_inside_radius({x=0, y=0, z=0}, 31000)
+    for _, obj in ipairs(objects) do
+            local self = obj:get_luaentity()
+            local n = self.name
+            if type(minetest.registered_entities[n].head) == "boolean" then
+                    obj:set_detach()
+                    obj:remove()
+                    minetest.debug(dump(self))
+            end
+    end
+end
 
+function mobkit.actfunc(self, staticdata, dtime_s)
+    local name = self.name
+    local h_name = minetest.registered_entities[name].head
+    if type(h_name) == "boolean" then return end
+    if type(h_name) == "string" then
+          -- head attaching
+	         local selfpos = self.object:get_pos()
+	         local rel_pos = minetest.registered_entities[h_name].pos
+	         local real_pos = {x = selfpos.x+rel_pos.x, y=selfpos.y+rel_pos.y, z=selfpos.z+rel_pos.z}
+	         local head_obj = minetest.add_entity(real_pos, h_name)
+	         local rot = self.object:get_rotation()
+	         head_obj:set_attach(self.object, "", rel_pos, {x=deg(rot.x), y=deg(rot.y), z=deg(rot.z)})
+	end
 	self.logic = self.logic or self.brainfunc
 	self.physics = self.physics or mobkit.physics
 	
@@ -927,6 +951,10 @@ function mobkit.actfunc(self, staticdata, dtime_s)
 end
 
 function mobkit.stepfunc(self,dtime)	-- not intended to be modified
+    local name = self.name
+    local h_name = minetest.registered_entities[name].head
+    if type(h_name) ~= "boolean" then 
+    -- Implements the following code if the object doesn`t come as a 'head'.
 	self.dtime = min(dtime,0.2)
 	self.height = mobkit.get_box_height(self)
 	
@@ -952,7 +980,10 @@ function mobkit.stepfunc(self,dtime)	-- not intended to be modified
 	
 	self.lastvelocity = self.object:get_velocity()
 	self.time_total=self.time_total+self.dtime
+	end
 end
+
+minetest.register_on_shutdown(mobkit.before_shutdown)
 
 ----------------------------
 -- BEHAVIORS
