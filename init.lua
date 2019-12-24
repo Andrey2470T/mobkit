@@ -13,10 +13,12 @@ local abs = math.abs
 local pi = math.pi
 local floor = math.floor
 local ceil = math.ceil
+local deg = math.deg
 local random = math.random
 local sqrt = math.sqrt
 local max = math.max
 local min = math.min
+local modf = math.modf
 local tan = math.tan
 local pow = math.pow
 
@@ -40,11 +42,20 @@ local neighbors ={
 	{x=1,z=-1}
 	}
 
-	
+local saved_objs_positions = {}
 -- UTILITY FUNCTIONS
 
 function mobkit.dot(v1,v2)
 	return v1.x*v2.x+v1.y*v2.y+v1.z*v2.z
+end
+
+function mobkit.cmp_tnvals(t1, t2)   -- compare tables numerical values
+	return (t1.x == t2.x) and (t1.y == t2.y) and (t1.z == t2.z)
+end
+	
+function mobkit.round(num)
+     local int, frac = modf(num)
+     return (frac >= 0.5 and ceil(num)) or (frac < 0.5 and floor(num))
 end
 
 function mobkit.minmax(v,m)
@@ -59,6 +70,15 @@ function mobkit.dir2neighbor(dir)
 		if v.x == dir.x and v.z == dir.z then return k end
 	end
 	return 1
+end
+
+function mobkit.is_pos_out_of_vrange(self, pos)
+    local objpos = self.object:get_pos()
+    local name = self.name
+    if vector.distance(objpos, pos) > self.view_range then
+          return true
+    end
+    return false
 end
 
 function mobkit.neighbor_shift(neighbor,shift)	-- int shift: minus is left, plus is right
@@ -168,16 +188,29 @@ function mobkit.get_nodes_in_area(pos1,pos2,full)
 				end
 			
 				cnt=cnt+1
-				if cnt > 125 then 
+				--[[if cnt > 125 then 
 					minetest.chat_send_all('get_nodes_in_area: area too big ')
 					return result
-				end
+				end]]
 			
 			until y==npos2.y
 		until z==npos2.z
 	until x==npos2.x
 	
 	return result
+end
+
+-- Does the same thing as mobkit.get_nodes_in_area, only the returned table consists of nodes positions are indexed by numbers.
+function mobkit.get_nodes_in_area2(pos1, pos2)
+    local nodes = mobkit.get_nodes_in_area(pos1, pos2, true)
+    local new_nodes_tab = {}
+    local i = 0
+    for pos, node in pairs(nodes) do
+            i = i + 1
+            new_nodes_tab[i] = pos
+    end
+    
+    return new_nodes_tab
 end
 
 function mobkit.get_hitbox_bottom(self)
@@ -308,6 +341,29 @@ function mobkit.turn2yaw(self,tyaw,rate)
 		
 		if nyaw==tyaw then return true, nyaw-pi
 		else return false, nyaw-pi end
+end
+
+function mobkit.turn3d(self, trot, turns_a) -- turns_a is an amount of short turns during the turning 
+    local crot = self.head:get_rotation()
+    crot = {x=deg(crot.x), y=deg(crot.y), z=deg(crot.z)}
+    local r = mobkit.round(turns_a)
+    self.rot_step = {x=(trot.x-crot.x)/r, y=(trot.y-crot.y)/r, z=(trot.z-crot.z)/r}
+    
+    if not self.new_rot then
+            self.new_rot = {x=0, y=0, z=0}
+    end
+   
+    self.new_rot.x = (abs(self.rot_step.x) < 0.1 and trot.x) or (self.new_rot.x + self.rot_step.x)
+    self.new_rot.y = (abs(self.rot_step.y) < 0.1 and trot.y) or (self.new_rot.y + self.rot_step.y)
+    self.new_rot.z = (abs(self.rot_step.z) < 0.1 and trot.z) or (self.new_rot.z + self.rot_step.z)
+    local n = self.head:get_luaentity().name
+    local rel_pos = minetest.registered_entities[n].pos
+    self.head:set_detach()
+    self.head:set_attach(self.object, "", rel_pos, self.new_rot)
+    --self.head:set_rotation({x=crot.x+self.rot_step.x, y=crot.y+self.rot_step.y, z=crot.z+self.rot_step.z})
+    --minetest.debug("self.new_rot: " .. dump(self.new_rot))
+    --minetest.debug("trot: " .. dump(trot))
+    return mobkit.cmp_tnvals(self.new_rot, trot)
 end
 
 function mobkit.dir_to_rot(v,rot)
@@ -820,11 +876,11 @@ function mobkit.physics(self)
 	local snodepos = mobkit.get_node_pos(spos)
 	local surfnode = mobkit.nodeatpos(spos)
 	while surfnode and surfnode.drawtype == 'liquid' do
-		surfnodename = surfnode.name
 		surface = snodepos.y+0.5
 		if surface > spos.y+self.height then break end
 		snodepos.y = snodepos.y+1
 		surfnode = mobkit.nodeatpos(snodepos)
+		surfnodename = surfnode.name
 	end
 	self.isinliquid = surfnodename
 	if surface then				-- standing in liquid
@@ -871,24 +927,25 @@ function mobkit.statfunc(self)
 	return minetest.serialize(tmptab)
 end
 
-function mobkit.before_shutdown()
-    local objects = minetest.get_objects_inside_radius({x=0, y=0, z=0}, 31000)
-    for _, obj in ipairs(objects) do
+--[[function mobkit.before_shutdown()
+    local objs = minetest.luaentities
+    for _, obj in ipairs(objs) do
             local self = obj:get_luaentity()
             local n = self.name
+            if minetest.registered_entities[n].head then
+                    table.insert(mobkit.saved_objs_positions, {name=n, pos=obj:get_pos(), rot=obj:get_rotation(), 
             if type(minetest.registered_entities[n].head) == "boolean" then
                     obj:set_detach()
                     obj:remove()
                     minetest.debug(dump(self))
             end
     end
-end
+end]]
 
 function mobkit.actfunc(self, staticdata, dtime_s)
     local name = self.name
     local h_name = minetest.registered_entities[name].head
-    if type(h_name) == "boolean" then return end
-    if type(h_name) == "string" then
+    if h_name then
           -- head attaching
 	         local selfpos = self.object:get_pos()
 	         local rel_pos = minetest.registered_entities[h_name].pos
@@ -896,6 +953,7 @@ function mobkit.actfunc(self, staticdata, dtime_s)
 	         local head_obj = minetest.add_entity(real_pos, h_name)
 	         local rot = self.object:get_rotation()
 	         head_obj:set_attach(self.object, "", rel_pos, {x=deg(rot.x), y=deg(rot.y), z=deg(rot.z)})
+	         self.head = head_obj
 	end
 	self.logic = self.logic or self.brainfunc
 	self.physics = self.physics or mobkit.physics
@@ -908,12 +966,16 @@ function mobkit.actfunc(self, staticdata, dtime_s)
 	self.path_dir = 1
 	self.time_total = 0
 	self.water_drag = self.water_drag or 1
-
 	local sdata = minetest.deserialize(staticdata)
 	if sdata then 
 		for k,v in pairs(sdata) do
 			self[k] = v
+			
 		end
+	end
+	
+	if self.timeout and self.timeout>0 and dtime_s > self.timeout and next(self.memory)==nil then
+		self.object:remove()
 	end
 	
 	if not self.memory then 		-- this is the initial activation
@@ -921,10 +983,6 @@ function mobkit.actfunc(self, staticdata, dtime_s)
 		
 		-- texture variation
 		if #self.textures > 1 then self.texture_no = random(#self.textures) end
-	end
-	
-	if self.timeout and self.timeout>0 and dtime_s > self.timeout and next(self.memory)==nil then
-		self.object:remove()
 	end
 	
 	-- apply texture
@@ -948,13 +1006,10 @@ function mobkit.actfunc(self, staticdata, dtime_s)
 	self.oxygen = self.oxygen or self.lung_capacity
 	self.lastvelocity = {x=0,y=0,z=0}
 	self.sensefunc=sensors()
+	
 end
 
 function mobkit.stepfunc(self,dtime)	-- not intended to be modified
-    local name = self.name
-    local h_name = minetest.registered_entities[name].head
-    if type(h_name) ~= "boolean" then 
-    -- Implements the following code if the object doesn`t come as a 'head'.
 	self.dtime = min(dtime,0.2)
 	self.height = mobkit.get_box_height(self)
 	
@@ -980,11 +1035,9 @@ function mobkit.stepfunc(self,dtime)	-- not intended to be modified
 	
 	self.lastvelocity = self.object:get_velocity()
 	self.time_total=self.time_total+self.dtime
-	end
 end
 
-minetest.register_on_shutdown(mobkit.before_shutdown)
-
+--minetest.register_on_shutdown(mobkit.before_shutdown)
 ----------------------------
 -- BEHAVIORS
 ----------------------------
@@ -1178,6 +1231,98 @@ end
 -----------------------------
 -- HIGH LEVEL QUEUE FUNCTIONS
 -----------------------------
+-- target: node pos or object.
+function mobkit.hq_lookat(self, target, rate, prty) 
+    local func = function(self)
+       local pos = self.object:get_pos()
+       if type(target) == "table" then
+            local vec = vector.direction(pos, target)
+            return mobkit.turn3d(self, mobkit.dir_to_rot(vec), rate)
+            
+       elseif type(target) == "userdata" then
+	        local epos = target:get_pos()
+	        local vec = vector.direction(pos, epos)
+	        return mobkit.turn3d(self, mobkit.dir_to_rot(vec), rate)
+            
+        end
+     end
+        
+        mobkit.queue_high(self, func, prty)
+end
+
+function mobkit.hq_lookat_rand_pos(self, tar_type, turnsa_min, turnsa_max, lookat_t, prty)
+    local pos = self.object:get_pos()
+    local name = self.name
+    local rpos
+    local rta_min, rta_max = mobkit.round(turnsa_min), mobkit.round(turnsa_max)
+    local turnsa = random(rta_min, rta_max)
+    local robj
+    if tar_type == "node" then
+          local nodes = mobkit.get_nodes_in_area2({x=pos.x-self.view_range, y=pos.y-self.view_range, z=pos.z-self.view_range}, {x=pos.x+self.view_range, y=pos.y+self.view_range, z=pos.z+self.view_range})
+          rpos = #nodes and nodes[random(#nodes)]
+          if not rpos then return end
+	  --minetest.debug(tar_type .. "    " .. self.name .."[" .. minetest.pos_to_string(pos) .."]".. "is looking at " .. dump(rpos))
+    elseif tar_type == "entity" then
+          local objs = minetest.get_objects_inside_radius(pos, self.view_range)
+          robj = #objs and objs[random(#objs)]
+          if not robj then return end
+	  --minetest.debug(tar_type .. "    " .. self.name .."[" .. minetest.pos_to_string(pos) .."]".. "is looking at " .. dump(rpos))
+    end
+    local trot
+    local is_turned
+    local func = function(self)
+        if not is_turned then
+		local p = self.head:get_pos()
+		if robj then
+		    rpos = robj:get_pos()
+		    if mobkit.cmp_tnvals(p, rpos) or mobkit.cmp_tnvals(self.object:get_pos(), rpos) then 
+		          minetest.debug("cmp")
+                  mobkit.hq_turn_back_head(self, random(rta_min, rta_max), 21) return true 
+            end
+        else mobkit.hq_turn_back_head(self, random(rta_min, rta_max), 21) return true end
+		if mobkit.is_pos_out_of_vrange(self, rpos) then
+			minetest.debug("TRUE3")
+			mobkit.hq_turn_back_head(self, random(rta_min, rta_max), 21) return true
+		end
+		local torso_rot = self.object:get_rotation()
+		torso_rot = {x=deg(torso_rot.x), y=deg(torso_rot.y), z=deg(torso_rot.z)}
+		trot = mobkit.dir_to_rot(vector.direction(p, rpos), torso_rot)
+		trot = {x=deg(trot.x), y=deg(trot.y), z=deg(trot.z)}
+		local z, y = abs(trot.z-torso_rot.z), abs(trot.y-torso_rot.y)
+		local hname = minetest.registered_entities[name].head
+		local hprops = minetest.registered_entities[hname]
+		local up_lim, down_lim, horiz_lim = hprops.max_up_angle, hprops.max_down_angle, hprops.max_horizontal_angle
+		if y>horiz_lim or (z>up_lim or z>down_lim) then
+			minetest.debug("fhdhjgf")
+			mobkit.hq_turn_back_head(self, random(rta_min, rta_max), 21)
+			return true
+		end
+		end
+        is_turned = mobkit.turn3d(self, trot, turnsa)
+        if is_turned then 
+                 minetest.debug("minetest") 
+                 self.rot_step, self.new_rot=nil, nil
+                 mobkit.timer(self, lookat_t) -- looking at the object for random interval from 5 until 15 seconds.
+                 mobkit.hq_turn_back_head(self, random(rta_min, rta_max), 21)
+                 is_turned=nil  
+                 return true
+        end
+     end
+     
+     mobkit.queue_high(self, func, prty)
+end
+
+function mobkit.hq_turn_back_head(self, turns_a, prty)
+	local s_rot = {x=0, y=0, z=0}
+	local h_rot = self.head:get_rotation()
+	if mobkit.cmp_tnvals(s_rot, h_rot) then return end
+	
+	local func = function(self)
+	        return mobkit.turn3d(self, s_rot, turns_a)
+        end
+	
+	mobkit.queue_high(self, func, prty)
+end
 
 function mobkit.dumbstep(self,height,tpos,speed_factor,idle_duration)
 	if height <= 0.001 then
